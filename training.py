@@ -1,6 +1,7 @@
+import time
 import torch
 
-import time
+
 
 def train_autoencoder(encoder, decoder, train_loader, test_loader, optimizer, criterion, device, n_epochs=10):
     """
@@ -9,7 +10,9 @@ def train_autoencoder(encoder, decoder, train_loader, test_loader, optimizer, cr
     LOG_INTERVAL = 500
     running_loss = list()
     start_time = time.time()
+    print(start_time)
     encoder.to(device)
+    print(1)
     decoder.to(device)
 
     for epoch in range(n_epochs):

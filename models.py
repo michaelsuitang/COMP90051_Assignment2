@@ -9,14 +9,6 @@ from torchvision import datasets, transforms
 import torchvision.models as models
 
 
-if torch.cuda.is_available():
-    device = torch.device("cuda:0")
-elif torch.backends.mps.is_available(): 
-    device = torch.device("mps")
-else:
-    device = torch.device("cpu")
-
-
 # Fully connected layer encoder.
 class FcEncoder(nn.Module):
     def __init__(self, input_dim=224*224, output_dim=256):
@@ -30,7 +22,7 @@ class FcEncoder(nn.Module):
 # Each layer halves size of image by max pooling
 # TODO: Too few parameters now. Add more layers/MaxPool/FC layer at the end?
 class CnnEncoder(nn.Module):
-    def __init__(self, out_channels=16, hidden_c1=8, hidden_c2=16, hidden_c3=32, hidden_c4=64, latent_dim=256, kernel_size=17, padding=8):
+    def __init__(self, hidden_c1=8, hidden_c2=16, hidden_c3=32, hidden_c4=64, latent_dim=256, kernel_size=17, padding=8):
         super(CnnEncoder, self).__init__()
         self.latent_dim = latent_dim
         self.max_pool = nn.MaxPool2d(kernel_size=2, stride=2)
@@ -79,3 +71,14 @@ class Decoder(nn.Module):
         x = F.relu(self.deconv2(x))
         out = torch.sigmoid(self.deconv3(x)) # Expect input to be in [-1, 1] hence the sigmoid function
         return out
+
+class Classifier(nn.Module):
+    def __init__(self, hidden_width=64):
+        super(Classifier, self).__init__()
+        self.fc1 = nn.Linear(in_features=256, out_features=hidden_width)
+        self.fc2 = nn.Linear(in_features=hidden_width, out_features=2)
+
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x   # Softmax is performed inside CrossEntropyLoss, no softmax here.
