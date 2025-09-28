@@ -11,11 +11,14 @@ import torchvision.models as models
 
 # Fully connected layer encoder.
 class FcEncoder(nn.Module):
-    def __init__(self, input_dim=224*224, output_dim=256):
+    def __init__(self, in_channel=3, input_dim=224*224, output_dim=256):
         super(FcEncoder, self).__init__()
-        self.fc1 = nn.Linear(input_dim, output_dim)
+        self.fc1 = nn.Linear(input_dim*in_channel, output_dim)
+        self.in_channel = in_channel
+        self.input_dim = input_dim
 
     def forward(self, x):
+        x = x.reshape(x.size(0), self.in_channel*self.input_dim)
         return self.fc1(x)
 
 # 5-layer CNN encoder, can change # of channels in the middle layer. (2-layer downsampling would be too aggressive)
@@ -59,14 +62,17 @@ class DensenetEncoder(nn.Module):
 
 
 # For Fairness, we should use the same Decoder for all three autoencoders
+# Input should have dimension [batch_size, input_channel=16, width=4, height=4]
 class Decoder(nn.Module):
     def __init__(self, in_channels=16, hidden_c1=8, hidden_c2=8, kernel_size=8):
         super(Decoder, self).__init__()
         self.deconv1 = nn.ConvTranspose2d(in_channels=in_channels, out_channels=hidden_c1, kernel_size=kernel_size, stride=4, padding=3)
         self.deconv2 = nn.ConvTranspose2d(in_channels=hidden_c1, out_channels=hidden_c2, kernel_size=kernel_size, stride=4, padding=2)
         self.deconv3 = nn.ConvTranspose2d(in_channels=hidden_c2, out_channels=3, kernel_size=kernel_size, stride=4, padding=2)
+        self.in_channels = in_channels
 
     def forward(self, x):
+        x = x.reshape(x.size(0), self.in_channels, 4, 4)
         x = F.relu(self.deconv1(x))
         x = F.relu(self.deconv2(x))
         out = torch.sigmoid(self.deconv3(x)) # Expect input to be in [-1, 1] hence the sigmoid function
