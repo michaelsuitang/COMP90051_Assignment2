@@ -11,11 +11,12 @@ import torchvision.models as models
 
 # Fully connected layer encoder.
 class FcEncoder(nn.Module):
-    def __init__(self, input_dim=224*224, output_dim=256):
+    def __init__(self, input_dim=224*224*3, output_dim=256):
         super(FcEncoder, self).__init__()
         self.fc1 = nn.Linear(input_dim, output_dim)
 
     def forward(self, x):
+        x = x.view(x.size(0), -1)  # flatten
         return self.fc1(x)
 
 # 5-layer CNN encoder, can change # of channels in the middle layer. (2-layer downsampling would be too aggressive)
@@ -39,7 +40,6 @@ class CnnEncoder(nn.Module):
         x = self.max_pool(F.relu(self.conv4(x)))
         x = self.max_pool(F.relu(self.conv5(x)))
         x = x.mean([2, 3])
-        x = x.view(-1, 128 * 7 * 7)
         return x
 
 # DenseNet121 Encoder. 
@@ -60,16 +60,20 @@ class DensenetEncoder(nn.Module):
 
 # For Fairness, we should use the same Decoder for all three autoencoders
 class Decoder(nn.Module):
-    def __init__(self, in_channels=16, hidden_c1=8, hidden_c2=8, kernel_size=8):
-        super(Decoder, self).__init__()
-        self.deconv1 = nn.ConvTranspose2d(in_channels=in_channels, out_channels=hidden_c1, kernel_size=kernel_size, stride=4, padding=3)
-        self.deconv2 = nn.ConvTranspose2d(in_channels=hidden_c1, out_channels=hidden_c2, kernel_size=kernel_size, stride=4, padding=2)
-        self.deconv3 = nn.ConvTranspose2d(in_channels=hidden_c2, out_channels=3, kernel_size=kernel_size, stride=4, padding=2)
+    def __init__(self, latent_dim=256, in_channels=16, hidden_c1=8, hidden_c2=8, kernel_size=8):
+        super().__init__()
+        self.fc = nn.Linear(latent_dim, in_channels * 4 * 4)
 
-    def forward(self, x):
-        x = F.relu(self.deconv1(x))
-        x = F.relu(self.deconv2(x))
-        out = torch.sigmoid(self.deconv3(x)) # Expect input to be in [-1, 1] hence the sigmoid function
+        self.deconv1 = nn.ConvTranspose2d(in_channels, hidden_c1, kernel_size=kernel_size, stride=4, padding=3)  # 4 -> 14
+        self.deconv2 = nn.ConvTranspose2d(hidden_c1, hidden_c2, kernel_size=kernel_size, stride=4, padding=2)    # 14 -> 56
+        self.deconv3 = nn.ConvTranspose2d(hidden_c2, 3,         kernel_size=kernel_size, stride=4, padding=2)    # 56 -> 224
+
+    def forward(self, z):                 # z: (B, 256)
+        z = self.fc(z)                    # (B, 16*4*4)
+        z = z.view(z.size(0), 16, 4, 4)   # (B, 16, 4, 4)
+        z = F.relu(self.deconv1(z))
+        z = F.relu(self.deconv2(z))
+        out = torch.tanh(self.deconv3(z))   
         return out
 
 class Classifier(nn.Module):
@@ -81,4 +85,4 @@ class Classifier(nn.Module):
     def forward(self, x):
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
-        return x   # Softmax is performed inside CrossEntropyLoss, no softmax here.
+        return x   # Softmax is performed inside CrossEntropyLoss, no softmax here
