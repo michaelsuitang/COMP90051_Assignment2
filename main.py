@@ -8,6 +8,32 @@ from models import FcEncoder, CnnEncoder, EfficientNetEncoder, Decoder, Classifi
 from preprocessing import train_transform, test_transform, ImageDataset
 from training import train_autoencoder
 
+def store_output(filename_list, encoder, output_file, device, transform=test_transform, batch_size=64, img_dir="data/img_align_celeba/img_align_celeba"):
+    ds = ImageDataset(
+        image_file_list=filename_list,   # list of all image filenames 
+        image_dir=img_dir,      # directory where the images are stored
+        labels=None,                   # no labels for now (unsupervised / placeholder)
+        transform=transform      # preprocessing + augmentation for training set
+    )
+
+    loader = DataLoader(
+        ds,
+        batch_size=batch_size,     # number of images per batch
+        shuffle=False,     # do not shuffle test data
+        num_workers=4,
+        pin_memory=True
+    )
+    encoder.eval()
+    output_list = []
+    for x, _ in loader:
+        x = x.to(device)
+        out = encoder(x)
+        output_list.append(out.cpu())
+
+    all_outputs = torch.cat(all_outputs, dim=0)
+    torch.save(all_outputs, output_file)
+
+
 if __name__ == "__main__":
 
     if torch.cuda.is_available():
