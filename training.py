@@ -7,16 +7,19 @@ def train_autoencoder(encoder, decoder, train_loader, test_loader, optimizer, cr
     """
     Generic training loop for supervised multiclass learning
     """
-    LOG_INTERVAL = 500
+    LOG_INTERVAL = 100
     running_loss = list()
+    test_losses = list()
     start_time = time.time()
     encoder.to(device)
     decoder.to(device)
 
     for epoch in range(n_epochs):
         epoch_loss = 0.
-
+        print(time.time() - start_time)
         for i, data in enumerate(train_loader):  # Loop over elements in training set
+            if not i:
+                print(time.time() - start_time)
             x, _ = data
             batch_size = x.shape[0]
             
@@ -40,7 +43,7 @@ def train_autoencoder(encoder, decoder, train_loader, test_loader, optimizer, cr
                 print('[TRAIN] Epoch {} [{}/{}]| Mean loss {:.4f} | Time {:.2f} s'.format(epoch,
                     i, len(train_loader), mean_loss, deltaT))
 
-        print('Epoch complete! Mean training loss: {:.4f}'.format(epoch_loss/len(train_loader)))
+        print('Epoch complete! Mean training loss: {:.4f} | Time {:.2f} s'.format(epoch_loss/len(train_loader), time.time()-start_time))
 
         test_loss = 0.
 
@@ -54,4 +57,6 @@ def train_autoencoder(encoder, decoder, train_loader, test_loader, optimizer, cr
 
                 test_loss += criterion(input=reconstructed_x, target=x).item() / batch_size
 
-        print('[TEST] Mean loss {:.4f}'.format(test_loss/len(test_loader)))
+        print('[TEST] Mean loss {:.4f} | Time {:.2f} s'.format(test_loss/len(test_loader), time.time()-start_time))
+        test_losses.append(test_loss)
+    return running_loss, test_losses

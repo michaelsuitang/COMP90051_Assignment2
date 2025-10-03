@@ -3,242 +3,71 @@ from torch import nn
 from torch.utils.data import DataLoader
 import random
 from models import FcEncoder, CnnEncoder, EfficientNetEncoder, Decoder
-from preprocessing import transform, ImageDataset
+from preprocessing import train_transform, test_transform, ImageDataset
 from training import train_autoencoder
 
-def bootstrap_split(filenames, B=3, seed=90051):
+def bootstrap_split(filenames, B=10, seed=90051):
     random.seed(seed)
     n = len(filenames)
     splits = []
     for _ in range(B):
-        train_idx = [random.randint(0, n - 1) for _ in range(n)] 
-        val_idx = list(set(range(n)) - set(train_idx))  
-        splits.append((train_idx, val_idx))
+        train_filenames = [filenames[random.randint(0, n - 1)] for _ in range(n)] 
+        val_filenames = list(set(filenames) - set(train_filenames))  
+        splits.append((train_filenames, val_filenames))
     return splits
 
+def train_and_val(train_filenames, val_filenames, model, device, lr, betas, train_transform=train_transform, test_transform=test_transform, batch_size=64, img_dir="data/img_align_celeba/img_align_celeba"):
 
-def tune_fc_with_bootstrap(filenames, device, B=3):
+    train_dataset = ImageDataset(image_file_list = train_filenames, image_dir= img_dir, labels=None, transform = train_transform)
+    val_dataset   = ImageDataset(image_file_list = val_filenames, image_dir = img_dir, labels=None, transform = test_transform)
 
-    # Step 1: lr
-    lr_candidates = [1e-2, 1e-3, 5e-4]
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True, drop_last=True)
+    val_loader   = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+
+    if model == "FC":
+        encoder = FcEncoder().to(device)
+    elif model == "CNN":
+        encoder = CnnEncoder().to(device)
+    elif model == "EfficientNet":
+        encoder = EfficientNetEncoder().to(device)
+    else:
+        raise Exception("Model type must be FC, CNN or EfficientNet.")
+
+    decoder = Decoder().to(device)
+    optimizer = torch.optim.Adam(
+        list(encoder.parameters()) + list(decoder.parameters()),
+        lr=lr, betas=betas
+    )
+    criterion = nn.MSELoss(reduction="sum")
+    running_loss, val_losses = train_autoencoder(encoder, decoder, train_loader, val_loader, optimizer, criterion, device)
+    return running_loss, val_losses, encoder, decoder
+
+# Tune for each train-test split. Here filenames should be train files generated using bootstrap_split
+def tune_with_bootstrap(filenames, val_filenames, device, model, lr_candidates=[1e-3, 1e-4, 1e-5], B=3, train_transform=train_transform, test_transform=test_transform, batch_size=64, img_dir="data/img_align_celeba/img_align_celeba"):
+
+    # Step 1: Find the best lr
     betas_fixed = (0.9, 0.999)
     best_lr, best_loss = None, float("inf")
-    print(ImageDataset.__init__.__code__.co_varnames)
     for lr in lr_candidates:
         print(f"\n[Step 1] Trying lr={lr}, betas={betas_fixed}")
         losses = []
-        for b, (train_ids, val_ids) in enumerate(bootstrap_split(filenames, B)):
-            train_files = [filenames[i] for i in train_ids]
-            val_files   = [filenames[i] for i in val_ids]
-           
-
-            train_dataset = ImageDataset(image_file_list = train_files, image_dir= "data/img_align_celeba/img_align_celeba", labels=None, transform = transform)
-            val_dataset   = ImageDataset(image_file_list = val_files, image_dir = "data/img_align_celeba/img_align_celeba", labels=None, transform = transform)
-
-            train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
-            val_loader   = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
-
-            encoder = FcEncoder().to(device)
-            decoder = Decoder().to(device)
-            optimizer = torch.optim.Adam(
-                list(encoder.parameters()) + list(decoder.parameters()),
-                lr=lr, betas=betas_fixed
-            )
-            criterion = nn.MSELoss(reduction="sum")
-
-            val_loss = train_autoencoder(encoder, decoder, train_loader, val_loader, optimizer, criterion, device)
-            losses.append(val_loss)
+        for b, (train_files, val_files) in enumerate(bootstrap_split(filenames, B)):
+            
+            _, val_losses, _, _ = train_and_val(train_files, val_files, model, device, lr, betas_fixed, train_transform, test_transform, batch_size, img_dir)
+            losses.append(val_losses[-1])
 
         avg_loss = sum(losses) / len(losses)
-        print(f"lr={lr} -> avg val loss={avg_loss:.4f}")
+        print(f"lr={lr} -> avg val loss={avg_loss:.4f}\n")
         if avg_loss < best_loss:
             best_lr, best_loss = lr, avg_loss
 
-    print(f"\nBest lr={best_lr} with val loss={best_loss:.4f}")
-
-    # Step 2: betas
-    betas_candidates = [(0.9, 0.999), (0.9, 0.99), (0.5, 0.999)]
-    best_betas, best_loss = None, float("inf")
-
-    for betas in betas_candidates:
-        print(f"\n[Step 2] Trying betas={betas}, lr={best_lr}")
-        losses = []
-        for b, (train_ids, val_ids) in enumerate(bootstrap_split(filenames, B)):
-            train_files = [filenames[i] for i in train_ids]
-            val_files   = [filenames[i] for i in val_ids]
-
-            train_dataset = ImageDataset(image_file_list=train_files, image_dir="data/img_align_celeba/img_align_celeba", labels=None, transform=transform)
-            val_dataset   = ImageDataset(image_file_list=val_files, image_dir="data/img_align_celeba/img_align_celeba", labels=None, transform=transform)
-
-            train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
-            val_loader   = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
-
-            encoder = FcEncoder().to(device)
-            decoder = Decoder().to(device)
-            optimizer = torch.optim.Adam(
-                list(encoder.parameters()) + list(decoder.parameters()),
-                lr=best_lr, betas=betas
-            )
-            criterion = nn.MSELoss(reduction="sum")
-
-            val_loss = train_autoencoder(encoder, decoder, train_loader, val_loader, optimizer, criterion, device)
-            losses.append(val_loss)
-
-        avg_loss = sum(losses) / len(losses)
-        print(f"betas={betas} -> avg val loss={avg_loss:.4f}")
-        if avg_loss < best_loss:
-            best_betas, best_loss = betas, avg_loss
-
-    print(f"\n Final best params: lr={best_lr}, betas={best_betas}, val loss={best_loss:.4f}")
-    return best_lr, best_betas
-
-def tune_cnn_with_bootstrap(filenames, device, B=3):
-
-    # Step 1: lr
-    lr_candidates = [1e-2, 1e-3, 5e-4]
-    betas_fixed = (0.9, 0.999)
-    best_lr, best_loss = None, float("inf")
-
-    for lr in lr_candidates:
-        print(f"\n[Step 1] Trying lr={lr}, betas={betas_fixed}")
-        losses = []
-        for b, (train_ids, val_ids) in enumerate(bootstrap_split(filenames, B)):
-            train_files = [filenames[i] for i in train_ids]
-            val_files   = [filenames[i] for i in val_ids]
-
-            train_dataset = ImageDataset(image_file_list = train_files, image_dir= "data/img_align_celeba/img_align_celeba", labels=None, transform = transform)
-            val_dataset   = ImageDataset(image_file_list = val_files, image_dir = "data/img_align_celeba/img_align_celeba", labels=None, transform = transform)
-
-            train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
-            val_loader   = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
-
-            encoder = CnnEncoder().to(device)
-            decoder = Decoder().to(device)
-            optimizer = torch.optim.Adam(
-                list(encoder.parameters()) + list(decoder.parameters()),
-                lr=lr, betas=betas_fixed
-            )
-            criterion = nn.MSELoss(reduction="sum")
-
-            val_loss = train_autoencoder(encoder, decoder, train_loader, val_loader, optimizer, criterion, device)
-            losses.append(val_loss)
-
-        avg_loss = sum(losses) / len(losses)
-        print(f"lr={lr} -> avg val loss={avg_loss:.4f}")
-        if avg_loss < best_loss:
-            best_lr, best_loss = lr, avg_loss
-
-    print(f"\nBest lr={best_lr} with val loss={best_loss:.4f}")
-
-    # Step 2: betas
-    betas_candidates = [(0.9, 0.999), (0.9, 0.99), (0.5, 0.999)]
-    best_betas, best_loss = None, float("inf")
-
-    for betas in betas_candidates:
-        print(f"\n[Step 2] Trying betas={betas}, lr={best_lr}")
-        losses = []
-        for b, (train_ids, val_ids) in enumerate(bootstrap_split(filenames, B)):
-            train_files = [filenames[i] for i in train_ids]
-            val_files   = [filenames[i] for i in val_ids]
-
-            train_dataset = ImageDataset(image_file_list = train_files, image_dir= "data/img_align_celeba/img_align_celeba", labels=None, transform = transform)
-            val_dataset   = ImageDataset(image_file_list = val_files, image_dir = "data/img_align_celeba/img_align_celeba", labels=None, transform = transform)
-
-            train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
-            val_loader   = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
-
-            encoder = CnnEncoder().to(device)
-            decoder = Decoder().to(device)
-            optimizer = torch.optim.Adam(
-                list(encoder.parameters()) + list(decoder.parameters()),
-                lr=best_lr, betas=betas
-            )
-            criterion = nn.MSELoss(reduction="sum")
-
-            val_loss = train_autoencoder(encoder, decoder, train_loader, val_loader, optimizer, criterion, device)
-            losses.append(val_loss)
-
-        avg_loss = sum(losses) / len(losses)
-        print(f"betas={betas} -> avg val loss={avg_loss:.4f}")
-        if avg_loss < best_loss:
-            best_betas, best_loss = betas, avg_loss
-
-    print(f"\n Final best params for CNN: lr={best_lr}, betas={best_betas}, val loss={best_loss:.4f}")
-    return best_lr, best_betas
-
-def tune_efficientnet_with_bootstrap(filenames, device, B=3):
-
-    # Step 1: lr
-    lr_candidates = [1e-2, 1e-3, 5e-4]
-    betas_fixed = (0.9, 0.999)
-    best_lr, best_loss = None, float("inf")
-
-    for lr in lr_candidates:
-        print(f"\n[Step 1] Trying lr={lr}, betas={betas_fixed}")
-        losses = []
-        for b, (train_ids, val_ids) in enumerate(bootstrap_split(filenames, B)):
-            train_files = [filenames[i] for i in train_ids]
-            val_files   = [filenames[i] for i in val_ids]
-
-            train_dataset = ImageDataset(image_file_list = train_files, image_dir= "data/img_align_celeba/img_align_celeba", labels=None, transform = transform)
-            val_dataset   = ImageDataset(image_file_list = val_files, image_dir = "data/img_align_celeba/img_align_celeba", labels=None, transform = transform)
-
-            train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
-            val_loader   = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
-
-            encoder = EfficientNetEncoder().to(device)
-            decoder = Decoder().to(device)
-            optimizer = torch.optim.Adam(
-                list(encoder.parameters()) + list(decoder.parameters()),
-                lr=lr, betas=betas_fixed
-            )
-            criterion = nn.MSELoss(reduction="sum")
-
-            val_loss = train_autoencoder(encoder, decoder, train_loader, val_loader, optimizer, criterion, device)
-            losses.append(val_loss)
-
-        avg_loss = sum(losses) / len(losses)
-        print(f"lr={lr} -> avg val loss={avg_loss:.4f}")
-        if avg_loss < best_loss:
-            best_lr, best_loss = lr, avg_loss
-
-    print(f"\nBest lr={best_lr} with val loss={best_loss:.4f}")
-
-    # Step 2: betas
-    betas_candidates = [(0.9, 0.999), (0.9, 0.99), (0.5, 0.999)]
-    best_betas, best_loss = None, float("inf")
-
-    for betas in betas_candidates:
-        print(f"\n[Step 2] Trying betas={betas}, lr={best_lr}")
-        losses = []
-        for b, (train_ids, val_ids) in enumerate(bootstrap_split(filenames, B)):
-            train_files = [filenames[i] for i in train_ids]
-            val_files   = [filenames[i] for i in val_ids]
-
-            train_dataset = ImageDataset(image_file_list = train_files, image_dir= "data/img_align_celeba/img_align_celeba", labels=None, transform = transform)
-            val_dataset   = ImageDataset(image_file_list = val_files, image_dir = "data/img_align_celeba/img_align_celeba", labels=None, transform = transform)
-
-            train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
-            val_loader   = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
-
-            encoder = EfficientNetEncoder().to(device)
-            decoder = Decoder().to(device)
-            optimizer = torch.optim.Adam(
-                list(encoder.parameters()) + list(decoder.parameters()),
-                lr=best_lr, betas=betas
-            )
-            criterion = nn.MSELoss(reduction="sum")
-
-            val_loss = train_autoencoder(encoder, decoder, train_loader, val_loader, optimizer, criterion, device)
-            losses.append(val_loss)
-
-        avg_loss = sum(losses) / len(losses)
-        print(f"betas={betas} -> avg val loss={avg_loss:.4f}")
-        if avg_loss < best_loss:
-            best_betas, best_loss = betas, avg_loss
-
-    print(f"\n Final best params for EfficientNet: lr={best_lr}, betas={best_betas}, val loss={best_loss:.4f}")
-    return best_lr, best_betas
+    print(f"\nBest lr={best_lr} with val loss={best_loss:.4f}\n")
+    
+    # Step 2: Train the model using best lr
+    print(f"\nTraining model {model} using best lr: {best_lr} on the whole training data.\n")
+    running_loss, val_losses, encoder, _ = train_and_val(filenames, val_filenames, model, device, best_lr, betas_fixed, train_transform, test_transform, batch_size, img_dir)
+    return running_loss, val_losses, encoder
+    
 
 
 
